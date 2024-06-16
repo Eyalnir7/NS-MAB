@@ -13,11 +13,17 @@ random.seed(639)
 matplotlib.use('TkAgg')
 
 
-def calculate_cum_regret(results, samples, changes, horizon):
+def calculate_cumulant_regret(results, samples, changes, horizon):
     """
-    :param results: dictionary of list of tuples. The key is the algorithm name and the value is a list of tuples. Each tuple contains the index of the chosen arm and the reward from it.
+    calculate the cumulant regret for each algorithm given data about the simulation
+    :param results: dictionary of list of tuples. The key is the algorithm name and the value is a list of tuples.
+    Each tuple contains the index of the chosen arm and the reward from it.
+    :param samples: list of samples from the arms from the simulation
+    :param changes: list of tuples. first entry in a tuple is the round of the change, with values in [1, horizon].
+    second entry is the new values of the arms as a list.
+    :param horizon: number of rounds
     """
-    cum_regret = {algo_name: np.zeros(horizon) for algo_name in results.keys()}
+    cumulant_regret = {algo_name: np.zeros(horizon) for algo_name in results.keys()}
     phase = 0
     arm_values = changes[phase][1]
     max_arm = arm_values.index(max(arm_values))
@@ -29,13 +35,14 @@ def calculate_cum_regret(results, samples, changes, horizon):
             max_arm = arm_values.index(max(arm_values))
 
         for algo_name, algo_results in results.items():
-            cum_regret[algo_name][t] = samples[t][max_arm] - arm_values[algo_results[t][0]] + cum_regret[algo_name][
+            cumulant_regret[algo_name][t] = samples[t][max_arm] - arm_values[algo_results[t][0]] + cumulant_regret[algo_name][
                 t - 1] if t != 0 else samples[t][max_arm] - arm_values[algo_results[t][0]]
-    return cum_regret
+    return cumulant_regret
 
 
 def check_results_ducb(results, samples, round, gamma, zeta):
     """
+    check whether the ducb choice was correct in a given round
     :param results: results from the simulation
     :param samples: samples from the simulation
     :param round: the round to check the choise of ducb in. round in [1, horizon-2]
@@ -55,7 +62,9 @@ def check_results_ducb(results, samples, round, gamma, zeta):
         dsums[chosen_arm] += reward * (gamma ** (round - t - 1))
 
     n_t = sum(dcounts)
-    c = 2 * np.sqrt((zeta * np.log(n_t)) / dcounts)
+    c = 0
+    if round >= len(samples[0]):
+        c = 2 * np.sqrt((zeta * np.log(n_t)) / dcounts)
     ucb_values = dsums / dcounts + c
     print(ucb_values)
     chosen_arm_real = np.argmax(ucb_values)
@@ -76,44 +85,45 @@ def test1():
     ucb = UCB(3, usb_radius_function)
     algorithms = {"DUCB": algo, "SWUCB": sw_ucb, "UCB": ucb}
     changes = [(1, [0.5, 0.3, 0.4]), (3001, [0.5, 0.3, 0.9]), (5001, [0.5, 0.3, 0.4])]
-    cum_regret = {algo_name: np.zeros(horizon) for algo_name in algorithms.keys()}
+    cumulant_regret = {algo_name: np.zeros(horizon) for algo_name in algorithms.keys()}
     for i in range(N):
         results, samples = run_simulation(horizon, algorithms, changes, False)
         # print(check_results_ducb(results, samples, 4, gamma, 0.6))
-        current_cum_regret = calculate_cum_regret(results, samples, changes, horizon)
+        current_cum_regret = calculate_cumulant_regret(results, samples, changes, horizon)
         for algo_name in algorithms.keys():
-            cum_regret[algo_name] += 1 / N * current_cum_regret[algo_name]
+            cumulant_regret[algo_name] += 1 / N * current_cum_regret[algo_name]
 
-    plt.plot(cum_regret["DUCB"], label="DUCB")
-    plt.plot(cum_regret["SWUCB"], label="SWUCB")
-    plt.plot(cum_regret["UCB"], label="UCB")
+    plt.plot(cumulant_regret["DUCB"], label="DUCB")
+    plt.plot(cumulant_regret["SWUCB"], label="SWUCB")
+    plt.plot(cumulant_regret["UCB"], label="UCB")
     plt.legend()
     plt.show()
 
 
 def test2():
     N = 1
-    horizon = 10000
-    gamma = 1 - 0.25 * np.sqrt((1 / horizon))
-    algo = DUCB(0.6, 2, gamma)
+    horizon = 4
+    gamma = 0.5
+    algo = DUCB(1, 2, gamma)
     tau = 4 * np.sqrt(horizon * np.log(horizon))
     sw_radius_function = lambda t, c: np.sqrt((0.6 * np.log10(min(t, tau))) / (c))
     sw_ucb = SWUCB(2, tau, sw_radius_function)
     usb_radius_function = lambda t, c: np.sqrt((0.5 * np.log10(t)) / (c))
     ucb = UCB(2, usb_radius_function)
-    algorithms = {"DUCB": algo, "SWUCB": sw_ucb, "UCB": ucb}
-    changes = [(1, [0, 0]), (3001, [0.5, 1])]
-    cum_regret = {algo_name: np.zeros(horizon) for algo_name in algorithms.keys()}
+    algorithms = {"DUCB": algo, "UCB": ucb}
+    changes = [(1, [1, 0.5])]
+    cumulant_regret = {algo_name: np.zeros(horizon) for algo_name in algorithms.keys()}
     for i in range(N):
         results, samples = run_simulation(horizon, algorithms, changes, True)
-        # print(check_results_ducb(results, samples, 4, gamma, 0.6))
-        current_cum_regret = calculate_cum_regret(results, samples, changes, horizon)
+        for i in range(horizon):
+            print(check_results_ducb(results, samples, i, gamma, 1))
+        current_cum_regret = calculate_cumulant_regret(results, samples, changes, horizon)
         for algo_name in algorithms.keys():
-            cum_regret[algo_name] += 1 / N * current_cum_regret[algo_name]
+            cumulant_regret[algo_name] += 1 / N * current_cum_regret[algo_name]
 
-    plt.plot(cum_regret["DUCB"], label="DUCB")
-    plt.plot(cum_regret["SWUCB"], label="SWUCB")
-    plt.plot(cum_regret["UCB"], label="UCB")
+    plt.plot(cumulant_regret["DUCB"], label="DUCB")
+    # plt.plot(cumulant_regret["SWUCB"], label="SWUCB")
+    plt.plot(cumulant_regret["UCB"], label="UCB")
     plt.legend()
     plt.show()
 

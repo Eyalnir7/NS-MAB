@@ -1,4 +1,7 @@
+from matplotlib import gridspec
+
 from algorithms.DUCB import DUCB
+from algorithms.epsilon_greedy import EpsilonGreedy
 from simulation import run_simulation
 import numpy as np
 import pandas as pd
@@ -11,6 +14,29 @@ import random
 
 random.seed(639)
 matplotlib.use('TkAgg')
+
+
+def calculate_cumulant_armpicks(results, horizon, num_arms):
+    """
+    calculate the cumulant armpicks for each algorithm and each arm given data about the simulation. By cumulant armpicks
+    I mean the number of times an arm was picked up to round t.
+    :param results: dictionary of list of tuples. The key is the algorithm name and the value is a list of tuples.
+    Each tuple contains the index of the chosen arm and the reward from it.
+    :param horizon: number of rounds
+    :param num_arms: number of arms
+    :return: a dictionary of list of lists of integers. The key is the algorithm name and the value is a list containing
+    three lists. each list contains the number of times an arm was picked up to round t.
+    """
+    cumulant_armpicks = {algo_name: [np.zeros(horizon) for arm in range(num_arms)] for algo_name in results.keys()}
+    for t in range(horizon):
+        for algo_name, algo_results in results.items():
+            chosen_arm = algo_results[t][0]
+            for arm in range(num_arms):
+                if t > 0:
+                    cumulant_armpicks[algo_name][arm][t] = cumulant_armpicks[algo_name][arm][t - 1]
+                if arm == chosen_arm:
+                    cumulant_armpicks[algo_name][chosen_arm][t] += 1
+    return cumulant_armpicks
 
 
 def calculate_cumulant_regret(results, samples, changes, horizon):
@@ -35,8 +61,10 @@ def calculate_cumulant_regret(results, samples, changes, horizon):
             max_arm = arm_values.index(max(arm_values))
 
         for algo_name, algo_results in results.items():
-            cumulant_regret[algo_name][t] = samples[t][max_arm] - arm_values[algo_results[t][0]] + cumulant_regret[algo_name][
-                t - 1] if t != 0 else samples[t][max_arm] - arm_values[algo_results[t][0]]
+            cumulant_regret[algo_name][t] = arm_values[max_arm] - arm_values[algo_results[t][0]] + \
+                                            cumulant_regret[algo_name][
+                                                t - 1] if t != 0 else arm_values[max_arm] - arm_values[
+                algo_results[t][0]]
     return cumulant_regret
 
 
@@ -64,7 +92,7 @@ def check_results_ducb(results, samples, round, gamma, zeta):
     n_t = sum(dcounts)
     c = 0
     if round >= len(samples[0]):
-        c = 2 * np.sqrt((zeta * np.log(n_t)) / dcounts)
+        c = 2 * np.sqrt((zeta * np.log10(n_t)) / dcounts)
     ucb_values = dsums / dcounts + c
     print(ucb_values)
     chosen_arm_real = np.argmax(ucb_values)
@@ -74,7 +102,7 @@ def check_results_ducb(results, samples, round, gamma, zeta):
 
 
 def test1():
-    N = 10
+    N = 1
     horizon = 10000
     gamma = 1 - 0.25 * np.sqrt((1 / horizon))
     algo = DUCB(0.6, 3, gamma)
@@ -87,7 +115,7 @@ def test1():
     changes = [(1, [0.5, 0.3, 0.4]), (3001, [0.5, 0.3, 0.9]), (5001, [0.5, 0.3, 0.4])]
     cumulant_regret = {algo_name: np.zeros(horizon) for algo_name in algorithms.keys()}
     for i in range(N):
-        results, samples = run_simulation(horizon, algorithms, changes, False)
+        results, samples = run_simulation(horizon, algorithms, changes, True)
         # print(check_results_ducb(results, samples, 4, gamma, 0.6))
         current_cum_regret = calculate_cumulant_regret(results, samples, changes, horizon)
         for algo_name in algorithms.keys():
@@ -102,8 +130,8 @@ def test1():
 
 def test2():
     N = 1
-    horizon = 4
-    gamma = 0.5
+    horizon = 10000
+    gamma = 1 - 0.25 * np.sqrt((1 / horizon))
     algo = DUCB(1, 2, gamma)
     tau = 4 * np.sqrt(horizon * np.log(horizon))
     sw_radius_function = lambda t, c: np.sqrt((0.6 * np.log10(min(t, tau))) / (c))
@@ -111,12 +139,19 @@ def test2():
     usb_radius_function = lambda t, c: np.sqrt((0.5 * np.log10(t)) / (c))
     ucb = UCB(2, usb_radius_function)
     algorithms = {"DUCB": algo, "UCB": ucb}
-    changes = [(1, [1, 0.5])]
+    changes = [(1, [1, 0]), (3001, [0, 1]), (5001, [1, 0])]
     cumulant_regret = {algo_name: np.zeros(horizon) for algo_name in algorithms.keys()}
     for i in range(N):
         results, samples = run_simulation(horizon, algorithms, changes, True)
-        for i in range(horizon):
-            print(check_results_ducb(results, samples, i, gamma, 1))
+        armpicks = calculate_cumulant_armpicks(results, horizon, 2)
+        plt.plot(armpicks["DUCB"][0], label="DUCB arm 0")
+        plt.plot(armpicks["DUCB"][1], label="DUCB arm 1")
+        # plt.plot(cumulant_regret["SWUCB"], label="SWUCB")
+        plt.plot(armpicks["UCB"][1], label="UCB arm 1")
+        plt.plot(armpicks["UCB"][0], label="UCB arm 0")
+        plt.legend()
+        plt.show()
+
         current_cum_regret = calculate_cumulant_regret(results, samples, changes, horizon)
         for algo_name in algorithms.keys():
             cumulant_regret[algo_name] += 1 / N * current_cum_regret[algo_name]
@@ -127,4 +162,403 @@ def test2():
     plt.legend()
     plt.show()
 
-test1()
+
+def test3():
+    N = 1
+    horizon = 10000
+    gamma = 1 - 0.25 * np.sqrt((1 / horizon))
+    algo = DUCB(0.6, 2, gamma)
+    tau = np.floor(4 * np.sqrt(horizon * np.log(horizon))) * 2
+    sw_radius_function = lambda t, c: np.sqrt((0.6 * np.log10(min(t, tau))) / (c))
+    sw_ucb = SWUCB(2, tau, sw_radius_function)
+    usb_radius_function = lambda t, c: np.sqrt((0.5 * np.log10(t)) / (c))
+    ucb = UCB(2, usb_radius_function)
+    delta = np.sqrt((0.85 * tau - 2) * np.log(tau) / (2 * (0.15 * tau - 1.5) ** 2))
+    c = np.floor(0.3 * tau) if 0.3 * tau % 2 == 1 else np.floor(0.3 * tau)
+    algorithms = {"DUCB": algo, "SWUCB": sw_ucb, "UCB": ucb}
+    changes = [(1, [0, 0])]
+    i = 0
+    while True:
+        if i * tau + c + i + 1 > horizon:
+            break
+        changes.append((i * tau + c + i, [delta, 1]))
+        if (i + 1) * tau + i + 1 > horizon:
+            break
+        changes.append(((i + 1) * tau + i + 1, [delta, 0]))
+        i += 1
+    print(len(changes))
+    cumulant_regret = {algo_name: np.zeros(horizon) for algo_name in algorithms.keys()}
+    for i in range(N):
+        results, samples = run_simulation(horizon, algorithms, changes, True)
+        # print(check_results_ducb(results, samples, 4, gamma, 0.6))
+        armpicks = calculate_cumulant_armpicks(results, horizon, 2)
+        plt.plot(armpicks["DUCB"][0], label="DUCB arm 0")
+        plt.plot(armpicks["DUCB"][1], label="DUCB arm 1")
+        # plt.plot(cumulant_regret["SWUCB"], label="SWUCB")
+        # plt.plot(armpicks["UCB"][1], label="UCB arm 1")
+        # plt.plot(armpicks["UCB"][0], label="UCB arm 0")
+        plt.plot(armpicks["SWUCB"][1], label="SWUCB arm 1")
+        plt.plot(armpicks["SWUCB"][0], label="SWUCB arm 0")
+        for x in [i[0] for i in changes]:
+            plt.axvline(x=x, color='red', linestyle='--', linewidth=0.8)
+        plt.legend()
+        plt.show()
+        current_cum_regret = calculate_cumulant_regret(results, samples, changes, horizon)
+        for algo_name in algorithms.keys():
+            cumulant_regret[algo_name] += 1 / N * current_cum_regret[algo_name]
+
+    plt.plot(cumulant_regret["DUCB"], label="DUCB")
+    plt.plot(cumulant_regret["SWUCB"], label="SWUCB")
+    # plt.plot(cumulant_regret["UCB"], label="UCB")
+    for x in [i[0] for i in changes]:
+        plt.axvline(x=x, color='red', linestyle='--', linewidth=0.8)
+    print(cumulant_regret["SWUCB"] == cumulant_regret["UCB"])
+    plt.legend()
+    plt.show()
+
+
+def test4():
+    N = 1
+    horizon = 10000
+    gamma = 1 - 0.25 * np.sqrt((1 / horizon))
+    algo = DUCB(0.6, 2, gamma)
+    tau = np.floor(4 * np.sqrt(horizon * np.log(horizon))) * 2
+    sw_radius_function = lambda t, c: np.sqrt((0.6 * np.log10(min(t, tau))) / (c))
+    sw_ucb = SWUCB(2, tau, sw_radius_function)
+    usb_radius_function = lambda t, c: np.sqrt((0.5 * np.log10(t)) / (c))
+    ucb = UCB(2, usb_radius_function)
+    delta = np.sqrt((0.85 * tau - 2) * np.log(tau) / (2 * (0.15 * tau - 1.5) ** 2))
+    c = np.floor(0.3 * tau) if 0.3 * tau % 2 == 1 else np.floor(0.3 * tau) + 1
+    algorithms = {"DUCB": algo, "SWUCB": sw_ucb, "UCB": ucb}
+    changes = [(i * horizon // 10 + 1, [0, 1]) if i % 4 == 0 else (i * horizon // 10 + 1, [1, 0]) for i in range(10)]
+    cumulant_regret = {algo_name: np.zeros(horizon) for algo_name in algorithms.keys()}
+    for i in range(N):
+        results, samples = run_simulation(horizon, algorithms, changes, True)
+        # print(check_results_ducb(results, samples, 4, gamma, 0.6))
+        current_cum_regret = calculate_cumulant_regret(results, samples, changes, horizon)
+
+        for algo_name in algorithms.keys():
+            cumulant_regret[algo_name] += 1 / N * current_cum_regret[algo_name]
+
+    plt.plot(cumulant_regret["DUCB"], label="DUCB")
+    plt.plot(cumulant_regret["SWUCB"], label="SWUCB")
+    plt.plot(cumulant_regret["UCB"], label="UCB")
+    print(cumulant_regret["SWUCB"] == cumulant_regret["UCB"])
+    plt.legend()
+    plt.show()
+
+
+def test5():
+    N = 1
+    horizon = 10000
+    gamma = 1 - 0.25 * np.sqrt((1 / horizon))
+    algo = DUCB(2, 2, gamma)
+    usb_radius_function = lambda t, c: np.sqrt((0.5 * np.log(t)) / (c))
+    ucb = UCB(2, usb_radius_function)
+    delta = np.sqrt((0.85 * tau - 2) * np.log(tau) / (2 * (0.15 * tau - 1.5) ** 2))
+    c = np.floor(0.3 * tau) if 0.3 * tau % 2 == 1 else np.floor(0.3 * tau) + 1
+    algorithms = {"DUCB": algo, "SWUCB": sw_ucb, "UCB": ucb}
+    changes = [(1, (0, 0)), (2001, (delta, 1))]
+    cumulant_regret = {algo_name: np.zeros(horizon) for algo_name in algorithms.keys()}
+    for i in range(N):
+        results, samples = run_simulation(horizon, algorithms, changes, True)
+        armpicks = calculate_cumulant_armpicks(results, horizon, 2)
+        plt.plot(armpicks["DUCB"][0], label="DUCB arm 0")
+        plt.plot(armpicks["DUCB"][1], label="DUCB arm 1")
+        plt.plot(armpicks["SWUCB"][0], label="SWUCB arm 0")
+        plt.plot(armpicks["SWUCB"][1], label="SWUCB arm 1")
+        plt.plot(armpicks["UCB"][1], label="UCB arm 1")
+        plt.plot(armpicks["UCB"][0], label="UCB arm 0")
+        plt.legend()
+        plt.show()
+        # print(check_results_ducb(results, samples, 4, gamma, 0.6))
+        current_cum_regret = calculate_cumulant_regret(results, samples, changes, horizon)
+        for algo_name in algorithms.keys():
+            cumulant_regret[algo_name] += 1 / N * current_cum_regret[algo_name]
+
+    plt.plot(cumulant_regret["DUCB"], label="DUCB")
+    plt.plot(cumulant_regret["SWUCB"], label="SWUCB")
+
+    plt.plot(cumulant_regret["UCB"], label="UCB")
+    plt.legend()
+    plt.show()
+
+
+def test_for_deterministic_probability_thm():
+    N = 1000
+    horizon = 100
+    usb_radius_function = lambda t, c: np.sqrt((0.5 * np.log(t)) / (c))
+    ucb = UCB(2, usb_radius_function)
+    algorithms = {"UCB": ucb}
+    changes = [(1, [0.1, 0.1]), (51, [0.5, 1])]
+    cumulant_regret = {algo_name: np.zeros(horizon) for algo_name in algorithms.keys()}
+    for i in range(N):
+        results, samples = run_simulation(horizon, algorithms, changes, False)
+        current_cum_regret = calculate_cumulant_regret(results, samples, changes, horizon)
+        for algo_name in algorithms.keys():
+            cumulant_regret[algo_name] += 1 / N * current_cum_regret[algo_name]
+
+    plt.plot(cumulant_regret["UCB"], label="UCB")
+    plt.legend()
+    plt.show()
+
+
+def test6():
+    N = 1
+    horizon = 10000
+    gamma = 1 - 0.25 * np.sqrt((1 / horizon))
+    algo = DUCB(0.6, 2, gamma)
+    tau = np.floor(4 * np.sqrt(horizon * np.log(horizon))) * 2
+    sw_radius_function = lambda t, c: np.sqrt((0.6 * np.log10(min(t, tau))) / (c))
+    sw_ucb = SWUCB(2, tau, sw_radius_function)
+    usb_radius_function = lambda t, c: np.sqrt((0.5 * np.log10(t)) / (c))
+    ucb = UCB(2, usb_radius_function)
+    delta = np.sqrt((0.85 * tau - 2) * np.log(tau) / (2 * (0.15 * tau - 1.5) ** 2))
+    c = np.floor(0.3 * tau) if 0.3 * tau % 2 == 1 else np.floor(0.3 * tau)
+    algorithms = {"DUCB": algo, "SWUCB": sw_ucb, "UCB": ucb}
+    changes = [(1, [0, 0.5])]
+    # i = 0
+    # while True:
+    #     if i * tau + c + i + 1 > horizon:
+    #         break
+    #     changes.append((i * tau + c + i, [delta, 1]))
+    #     if (i + 1) * tau + i + 1 > horizon:
+    #         break
+    #     changes.append(((i + 1) * tau + i + 1, [delta, 0]))
+    #     i += 1
+    print(len(changes))
+    cumulant_regret = {algo_name: np.zeros(horizon) for algo_name in algorithms.keys()}
+    for i in range(N):
+        results, samples = run_simulation(horizon, algorithms, changes, True)
+        # print(check_results_ducb(results, samples, 4, gamma, 0.6))
+        armpicks = calculate_cumulant_armpicks(results, horizon, 2)
+        plt.plot(armpicks["DUCB"][0], label="DUCB arm 0")
+        plt.plot(armpicks["DUCB"][1], label="DUCB arm 1")
+        plt.plot(armpicks["UCB"][1], label="UCB arm 1")
+        plt.plot(armpicks["UCB"][0], label="UCB arm 0")
+        plt.plot(armpicks["SWUCB"][1], label="SWUCB arm 1")
+        plt.plot(armpicks["SWUCB"][0], label="SWUCB arm 0")
+        for x in [i[0] for i in changes]:
+            plt.axvline(x=x, color='red', linestyle='--', linewidth=0.8)
+        plt.legend()
+        plt.show()
+        current_cum_regret = calculate_cumulant_regret(results, samples, changes, horizon)
+        for algo_name in algorithms.keys():
+            cumulant_regret[algo_name] += 1 / N * current_cum_regret[algo_name]
+
+    plt.plot(cumulant_regret["DUCB"], label="DUCB")
+    plt.plot(cumulant_regret["SWUCB"], label="SWUCB")
+    plt.plot(cumulant_regret["UCB"], label="UCB")
+    for x in [i[0] for i in changes]:
+        plt.axvline(x=x, color='red', linestyle='--', linewidth=0.8)
+    # print(cumulant_regret["SWUCB"] == cumulant_regret["UCB"])
+    plt.legend()
+    plt.show()
+
+
+def eps_greedy_test():
+    horizon = 1000
+    epsilon = 0.01
+    algo = EpsilonGreedy(2, epsilon, True)
+    algorithms = {"epsilon-Greedy": algo}
+    changes = [(1, [0, 1]), (horizon // 2, [1, 0])]
+
+    results, samples = run_simulation(horizon, algorithms, changes, True)
+    current_cum_regret = calculate_cumulant_regret(results, samples, changes, horizon)
+
+    fig = plt.figure(figsize=(15, 7))
+
+    # Define GridSpec
+    gs = gridspec.GridSpec(2, 2, width_ratios=[1, 1], height_ratios=[1, 1])
+
+    ax1 = fig.add_subplot(gs[:, 0])
+    ax1.plot(current_cum_regret["epsilon-Greedy"], label="non-stationary deterministic epsilon-Greedy", color="orange")
+    ax1.set_xlabel("Rounds", fontsize=15)
+    ax1.set_ylabel("Cumulative Regret", fontsize=15)
+    ax1.set_title("Cumulative Regret of epsilon-Greedy", fontsize=18)
+    changes = [(1, [0, 1])]
+
+    results, samples = run_simulation(horizon, algorithms, changes, True)
+    current_cum_regret = calculate_cumulant_regret(results, samples, changes, horizon)
+
+    ax1.plot(current_cum_regret["epsilon-Greedy"], label="stationary deterministic epsilon-Greedy", color="blue")
+    ax1.legend(fontsize=15)
+    ax1.grid()
+
+    ax2 = fig.add_subplot(gs[0, 1])
+    arm1_constant = [0] * horizon
+    arm2_constant = [1] * horizon
+    arm1_variable = [0] * (horizon // 2) + [1] * (horizon // 2)
+    arm2_variable = [1] * (horizon // 2) + [0] * (horizon // 2)
+    ax2.plot(arm1_constant, label="arm 1 stationary instance", color="blue")
+    ax2.plot(arm2_constant, label="arm 2 stationary instance", color="blue", linestyle="--")
+    ax2.set_xlabel("Rounds", fontsize=15)
+    ax2.set_ylabel("Arm values", fontsize=15)
+    ax2.set_title("Stationary Instance Details: Arms Values Over Time", fontsize=18)
+    ax2.legend(fontsize=15)
+    ax2.grid()
+
+    ax3 = fig.add_subplot(gs[1, 1])
+    ax3.plot(arm1_variable, label="arm 1 non-stationary instance", color="orange")
+    ax3.plot(arm2_variable, label="arm 2 non-stationary instance", color="orange", linestyle="--")
+    ax3.set_xlabel("Rounds", fontsize=15)
+    ax3.set_ylabel("Arm values", fontsize=15)
+    ax3.set_title("Non-Stationary Instance Details: Arms Values Over Time", fontsize=18)
+    ax3.legend(fontsize=15)
+    ax3.grid()
+
+    plt.tight_layout()
+
+    # Show plots
+    plt.show()
+
+
+def UCB_test():
+    horizon = 10000
+    ucb_radius_function = lambda t, c: np.sqrt((2 * np.log(horizon)) / (c))
+    algo = UCB(2, ucb_radius_function)
+
+    algorithms = {"UCBT": algo}
+    changes = [(1, [0, 0]), ((horizon // 10) * 3 + 1, [0.2, 1])]
+
+    results, samples = run_simulation(horizon, algorithms, changes, True)
+    current_cum_regret = calculate_cumulant_regret(results, samples, changes, horizon)
+
+    fig = plt.figure(figsize=(15, 7))
+
+    # Define GridSpec
+    gs = gridspec.GridSpec(2, 2, width_ratios=[1, 1], height_ratios=[1, 1])
+
+    ax1 = fig.add_subplot(gs[:, 0])
+    ax1.plot(current_cum_regret["UCBT"], label="non-stationary UCBT", color="orange")
+    ax1.set_xlabel("Rounds", fontsize=15)
+    ax1.set_ylabel("Cumulative Regret", fontsize=15)
+    ax1.set_title("Cumulative Regret of UCBT", fontsize=18)
+    changes = [(1, [0.5, 0.55])]
+
+    results, samples = run_simulation(horizon, algorithms, changes, True)
+    current_cum_regret = calculate_cumulant_regret(results, samples, changes, horizon)
+
+    ax1.plot(current_cum_regret["UCBT"], label="stationary UCBT", color="blue")
+    ax1.legend(fontsize=15)
+    ax1.grid()
+
+    ax2 = fig.add_subplot(gs[0, 1])
+    arm1_constant = [0.5] * horizon
+    arm2_constant = [0.55] * horizon
+    arm1_variable = [float(0)] * (horizon // 10 + 1) + [0.2] * (horizon - (horizon // 10 + 1))
+    arm2_variable = [0] * (horizon // 10 + 1) + [1] * (horizon - (horizon // 10 + 1))
+    ax2.plot(arm1_constant, label="arm 1 stationary instance", color="blue")
+    ax2.set_ylim(0, 1)
+    ax2.plot(arm2_constant, label="arm 2 stationary instance", color="blue", linestyle="--")
+    ax2.set_xlabel("Rounds",  fontsize=15)
+    ax2.set_ylabel("Arm values",  fontsize=15)
+    ax2.set_title("Stationary Instance Details: Arms Values Over Time", fontsize=18)
+    ax2.legend(fontsize=15)
+    ax2.grid()
+
+    ax3 = fig.add_subplot(gs[1, 1])
+    ax3.plot(arm1_variable, label="arm 1 non-stationary instance", color="orange")
+    ax3.plot(arm2_variable, label="arm 2 non-stationary instance", color="orange", linestyle="--")
+    ax3.set_xlabel("Rounds",  fontsize=15)
+    ax3.set_ylabel("Arm values",  fontsize=15)
+    ax3.set_title("Non-Stationary Instance Details: Arms Values Over Time",  fontsize=18)
+    ax3.legend(fontsize=15)
+    ax3.grid()
+
+    plt.tight_layout()
+
+    # Show plots
+    plt.show()
+
+
+def swucb_test():
+    N = 1
+    horizon = 1000
+    gamma = 10
+    tau = np.floor(np.sqrt(horizon * np.log(horizon) / gamma)) * 2
+    alpha = np.sqrt(2 * np.log(tau))
+    c = np.floor(((tau ** 2) * (alpha ** 2) / 8) ** (1 / 3))
+    delta = alpha / (c ** 0.5)
+    sw_radius_function = lambda t, counter: np.sqrt((2 * np.log(min(t, tau))) / counter)
+    sw_ucb = SWUCB(2, tau, sw_radius_function)
+    algorithms = {"SWUCB": sw_ucb}
+    changes = [(1, [0, 0])]
+    # i = 0
+    # while True:
+    #     if i * tau + c + i + 1 > horizon:
+    #         break
+    #     changes.append((i * tau + c + i, [delta, 1]))
+    #     if (i + 1) * tau + i + 1 > horizon:
+    #         break
+    #     changes.append(((i + 1) * tau + i + 1, [delta, 0]))
+    #     i += 1
+    # print(len(changes))
+    for m in range(int(np.floor(gamma/2 - 1))+1):
+        changes.append((m * tau + 2 * c + m + 1, [delta, 1]))
+        changes.append(((m + 1) * tau + m, [delta, 0]))
+
+    arm1_variable = []
+    arm2_variable = []
+    for i in range(len(changes)):
+        cur_arm1 = changes[i][1][0]
+        cur_arm2 = changes[i][1][1]
+        if i < len(changes)-1:
+            arm1_variable += [cur_arm1] * (int(changes[i+1][0] - changes[i][0]))
+            arm2_variable += [cur_arm2] * (int(changes[i+1][0] - changes[i][0]))
+        else:
+            arm1_variable += [cur_arm1] * (int(horizon - changes[i][0] + 1))
+            arm2_variable += [cur_arm2] * (int(horizon - changes[i][0] + 1))
+
+    results, samples = run_simulation(horizon, algorithms, changes, True)
+    current_cum_regret = calculate_cumulant_regret(results, samples, changes, horizon)
+    fig = plt.figure(figsize=(15, 7))
+
+    # Define GridSpec
+    gs = gridspec.GridSpec(2, 2, width_ratios=[1, 1], height_ratios=[1, 1])
+
+    ax1 = fig.add_subplot(gs[:, 0])
+    ax1.plot(current_cum_regret["SWUCB"], label="SW-UCB large tau instance", color="orange")
+    ax1.set_xlabel("Rounds", fontsize=15)
+    ax1.set_ylabel("Cumulative Regret", fontsize=15)
+    ax1.set_title("Cumulative Regret of SW-UCB with Optimal Window Size", fontsize=18)
+
+    delta_small_instance = np.sqrt(5 * np.log(tau) / (2*tau))
+    changes = [(1, [0, delta_small_instance])]
+
+    results, samples = run_simulation(horizon, algorithms, changes, True)
+    current_cum_regret = calculate_cumulant_regret(results, samples, changes, horizon)
+
+    ax1.plot(current_cum_regret["SWUCB"], label="SW-UCB small tau instance", color="blue")
+    ax1.legend(fontsize=15)
+    ax1.grid()
+
+    ax2 = fig.add_subplot(gs[0, 1])
+    arm1_constant = [0] * horizon
+    arm2_constant = [delta_small_instance] * horizon
+
+    ax2.set_ylim(0, 1)
+    ax2.plot(arm1_constant, label="arm 1 stationary instance", color="blue")
+    ax2.plot(arm2_constant, label="arm 2 stationary instance", color="blue", linestyle="--")
+    ax2.set_xlabel("Rounds", fontsize=15)
+    ax2.set_ylabel("Arm values", fontsize=15)
+    ax2.set_title("Small tau Instance Details: Arms Values Over Time", fontsize=18)
+    ax2.legend(fontsize=15)
+    ax2.grid()
+
+    ax3 = fig.add_subplot(gs[1, 1])
+    ax3.plot(arm1_variable, label="arm 1 non-stationary instance", color="orange")
+    ax3.plot(arm2_variable, label="arm 2 non-stationary instance", color="orange", linestyle="--")
+    ax3.set_xlabel("Rounds", fontsize=15)
+    ax3.set_ylabel("Arm values", fontsize=15)
+    ax3.set_title("Large tau Instance Details: Arms Values Over Time", fontsize=18)
+    ax3.legend(fontsize=15)
+    ax3.grid()
+
+    plt.tight_layout()
+
+    # Show plots
+    plt.show()
+
+
+UCB_test()

@@ -1,5 +1,5 @@
 from matplotlib import gridspec
-
+from tqdm import tqdm
 from algorithms.DUCB import DUCB
 from algorithms.epsilon_greedy import EpsilonGreedy
 from simulation import run_simulation
@@ -25,7 +25,7 @@ def calculate_cumulant_armpicks(results, horizon, num_arms):
     :param horizon: number of rounds
     :param num_arms: number of arms
     :return: a dictionary of list of lists of integers. The key is the algorithm name and the value is a list containing
-    three lists. each list contains the number of times an arm was picked up to round t.
+    num_arms lists. each list contains the number of times an arm was picked up to round t.
     """
     cumulant_armpicks = {algo_name: [np.zeros(horizon) for arm in range(num_arms)] for algo_name in results.keys()}
     for t in range(horizon):
@@ -561,4 +561,76 @@ def swucb_test():
     plt.show()
 
 
-UCB_test()
+def DUCB_constant_instance():
+    N = 1
+    horizon = 10000
+    gamma = np.linspace(start=0.95, stop=0.9999999, num=100)
+    armpicks_ducb = []
+    armpicks_swucb = []
+    algo = DUCB(2, 2, 0.5)
+    regrets_ducb = []
+    regrets_swucb = []
+    for g in tqdm(gamma):
+        algo.discount_factor = g
+        tau = 1+g+g**2
+        sw_radius_function = lambda t, counter: np.sqrt((2 * np.log(min(t, tau))) / counter)
+        sw_ucb = SWUCB(2, tau, sw_radius_function)
+        # delta = np.sqrt(-np.log(1-g)*(1-g))
+        delta = np.sqrt((5 * np.log(tau)) / (2 * tau))
+        changes = [(1, [0, delta])]
+        algorithms = {"DUCB": algo, "SWUCB": sw_ucb}
+        results, samples = run_simulation(horizon, algorithms, changes, True)
+        calc_arms = calculate_cumulant_armpicks(results, horizon, 2)
+        armpicks_ducb.append(calc_arms["DUCB"][0][-1])
+        armpicks_swucb.append(calc_arms["SWUCB"][0][-1])
+        calc_regret = calculate_cumulant_regret(results, samples, changes, horizon)
+        regrets_ducb.append(calc_regret["DUCB"][-1])
+        regrets_swucb.append(calc_regret["SWUCB"][-1])
+    plt.plot(gamma, armpicks_ducb, label="DUCB arm 0")
+    plt.plot(gamma, armpicks_swucb, label="SWUCB arm 0")
+    plt.axvline(x=1 - 0.25 * np.sqrt((1 / horizon)), color='red', linestyle='--', linewidth=0.8, label="Optimal Discount Factor")
+    plt.xlabel("Discount Factor")
+    plt.ylabel("Number of times suboptimal arm was picked")
+    plt.title("DUCB on constant instance with different discount factors")
+    plt.legend()
+    plt.show()
+
+    plt.plot(gamma, regrets_ducb, label="DUCB")
+    plt.plot(gamma, regrets_swucb, label="SWUCB")
+    plt.axvline(x=1 - 0.25 * np.sqrt((1 / horizon)), color='red', linestyle='--', linewidth=0.8, label="Optimal Discount Factor")
+    plt.xlabel("Discount Factor")
+    plt.ylabel("Cumulative Regret")
+    plt.title("DUCB on constant instance with different discount factors")
+    plt.legend()
+    plt.show()
+
+
+def DUCB_SWUCB_eqiv():
+    N = 1
+    horizon = 100000
+    # gamma = 1 - 0.25 * np.sqrt((1 / horizon))
+    gamma = 0.9
+    ducb = DUCB(2, 2, gamma)
+    win = (1-gamma**horizon)/(1-gamma)
+    tau = 1/(1-gamma)
+    sw_radius_function = lambda t, counter: np.sqrt((2 * np.log(min(t, tau))) / counter)
+    delta = np.sqrt((5*np.log(win))/(2*win))
+    sw_ucb = SWUCB(2, tau, sw_radius_function)
+    algorithms = {"DUCB": ducb, "SWUCB": sw_ucb}
+    changes = [(1, [0, delta])]
+    cumulant_regret = {algo_name: np.zeros(horizon) for algo_name in algorithms.keys()}
+    for i in range(N):
+        results, samples = run_simulation(horizon, algorithms, changes, True)
+        current_cum_regret = calculate_cumulant_regret(results, samples, changes, horizon)
+        for algo_name in algorithms.keys():
+            cumulant_regret[algo_name] += 1 / N * current_cum_regret[algo_name]
+
+    print(cumulant_regret["DUCB"][-1], cumulant_regret["SWUCB"][-1])
+    plt.plot(cumulant_regret["DUCB"], label="DUCB")
+    plt.plot(cumulant_regret["SWUCB"], label="SWUCB")
+    plt.legend()
+    plt.show()
+
+
+
+DUCB_SWUCB_eqiv()
